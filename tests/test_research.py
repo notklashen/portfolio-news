@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 import httpx
 import pytest
 from openai import OpenAI
+from pydantic import ValidationError
 
 import portfolio_news.research as research_module
 from portfolio_news.errors import ResearchError
@@ -104,6 +105,7 @@ def test_uses_one_structured_unrestricted_responses_request(story_factory):
     assert call["include"] == ["web_search_call.action.sources"]
     assert call["text_format"] is ResearchDigest
     assert call["text"] == {"verbosity": "low"}
+    assert call["max_output_tokens"] == 10000
     assert call["store"] is False
     assert "Mention every supplied holding" in call["input"][0]["content"]
     assert "NASDAQ:GOOG" in call["input"][1]["content"]
@@ -215,6 +217,17 @@ def test_sdk_validation_error_is_reported_as_malformed_output():
     except Exception as validation_error:
         researcher = OpenAIResearcher("key", client=FakeClient(validation_error))
     with pytest.raises(ResearchError, match="malformed structured"):
+        researcher.research(
+            ["NASDAQ:GOOG"], lookback_start=START, lookback_end=END, recent_history=[]
+        )
+
+
+def test_truncated_structured_output_is_reported_clearly():
+    try:
+        ResearchDigest.model_validate_json('{"stories":[{"headline":"cut off')
+    except ValidationError as validation_error:
+        researcher = OpenAIResearcher("key", client=FakeClient(validation_error))
+    with pytest.raises(ResearchError, match="truncated before completing its JSON"):
         researcher.research(
             ["NASDAQ:GOOG"], lookback_start=START, lookback_end=END, recent_history=[]
         )

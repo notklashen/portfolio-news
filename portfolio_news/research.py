@@ -106,7 +106,10 @@ class OpenAIResearcher:
                 ],
                 text_format=ResearchDigest,
                 text={"verbosity": "low"},
-                max_output_tokens=3000,
+                # This budget includes hidden reasoning tokens as well as the structured JSON.
+                # Medium-effort research across a full portfolio can exhaust 3,000 tokens before
+                # the closing JSON delimiters are emitted. The API bills actual usage, not this cap.
+                max_output_tokens=10000,
                 store=False,
             )
 
@@ -118,6 +121,10 @@ class OpenAIResearcher:
                 logger=self.log,
             )
         except ValidationError as exc:
+            if "EOF while parsing" in str(exc):
+                raise ResearchError(
+                    "OpenAI structured digest output was truncated before completing its JSON"
+                ) from exc
             raise ResearchError("OpenAI returned malformed structured digest output") from exc
         except Exception as exc:
             raise ResearchError("OpenAI research request failed after bounded retries") from exc
