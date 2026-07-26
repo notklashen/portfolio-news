@@ -102,7 +102,7 @@ def test_uses_one_structured_low_context_responses_request(story_factory):
     assert call["tools"][0]["filters"]["allowed_domains"] == ["reuters.com"]
     assert call["include"] == ["web_search_call.action.sources"]
     assert call["text_format"] is ResearchDigest
-    assert call["verbosity"] == "low"
+    assert call["text"] == {"verbosity": "low"}
     assert call["store"] is False
 
 
@@ -154,7 +154,7 @@ def test_pinned_sdk_serializes_strict_schema_and_web_search_contract():
         include=["web_search_call.action.sources"],
         input="test",
         text_format=ResearchDigest,
-        verbosity="low",
+        text={"verbosity": "low"},
         store=False,
     )
     assert response.output_parsed == ResearchDigest()
@@ -164,6 +164,7 @@ def test_pinned_sdk_serializes_strict_schema_and_web_search_contract():
         "filters": {"allowed_domains": ["reuters.com"]},
     }
     assert captured["body"]["text"]["format"]["strict"] is True
+    assert captured["body"]["text"]["verbosity"] == "low"
 
 
 def test_rejects_non_allowlisted_story(story_factory):

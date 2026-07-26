@@ -95,7 +95,7 @@ class OpenAIResearcher:
                     {"role": "user", "content": prompt},
                 ],
                 text_format=ResearchDigest,
-                verbosity="low",
+                text={"verbosity": "low"},
                 max_output_tokens=3000,
                 store=False,
             )
