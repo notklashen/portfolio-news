@@ -24,8 +24,8 @@ def test_loads_environment_and_extends_domains(tmp_path):
     env["ADDITIONAL_ALLOWED_DOMAINS"] = "Example.com, https://issuer.example/"
     settings = Settings.from_env(environ=env)
     assert settings.openai_model == "gpt-5.6-sol"
-    assert settings.database_path == Path("/var/lib/portfolio-news/portfolio_news.db")
-    assert settings.lock_file == Path("/var/lib/portfolio-news/portfolio_news.lock")
+    assert settings.database_path == Path.home() / ".local/state/portfolio-news/portfolio_news.db"
+    assert settings.lock_file == Path.home() / ".local/state/portfolio-news/portfolio_news.lock"
     assert "example.com" in settings.allowed_domains
     assert "issuer.example" in settings.allowed_domains
 

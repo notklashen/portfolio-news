@@ -1,3 +1,7 @@
-# Install only when the host's systemd cannot parse timezone-qualified calendars.
-# Evaluate Paris wall time explicitly, so this does not depend on CRON_TZ support.
-* * * * * root test "$(TZ=Europe/Paris /bin/date +\%H:\%M)" = "08:00" && test "$(TZ=Europe/Paris /bin/date +\%u)" -le 5 && /usr/bin/systemctl start --no-block portfolio-news.service
+# BEGIN PORTFOLIO_NEWS
+# User-crontab fallback for accounts without a persistent systemd user manager.
+# Paris wall time is evaluated explicitly, without depending on the host timezone.
+SHELL=/bin/sh
+PATH=/usr/local/bin:/usr/bin:/bin
+* * * * * test "$(TZ=Europe/Paris /bin/date +\%H:\%M)" = "08:00" && test "$(TZ=Europe/Paris /bin/date +\%u)" -le 5 && "$HOME/portfolio-news/deploy/run.sh" >> "$HOME/.local/state/portfolio-news/cron.log" 2>&1
+# END PORTFOLIO_NEWS

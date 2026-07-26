@@ -121,10 +121,16 @@ class Settings:
             timezone=timezone,
             timezone_name=timezone_name,
             database_path=Path(
-                env.get("DATABASE_PATH", "/var/lib/portfolio-news/portfolio_news.db")
+                env.get(
+                    "DATABASE_PATH",
+                    "~/.local/state/portfolio-news/portfolio_news.db",
+                )
             ).expanduser(),
             lock_file=Path(
-                env.get("LOCK_FILE", "/var/lib/portfolio-news/portfolio_news.lock")
+                env.get(
+                    "LOCK_FILE",
+                    "~/.local/state/portfolio-news/portfolio_news.lock",
+                )
             ).expanduser(),
             openai_model=env.get("OPENAI_MODEL", "gpt-5.6-sol").strip() or "gpt-5.6-sol",
             allowed_domains=allowed_domains,

@@ -51,7 +51,7 @@ Useful optional controls are:
 - `MAX_TELEGRAM_CHARS` (default 3,500, hard maximum 4,096)
 - API timeouts, retry count, database/lock paths, and `LOG_LEVEL`
 
-For an existing deployment, update any `OPENAI_MODEL` entry in `/etc/portfolio-news/portfolio-news.env` to `gpt-5.6-sol`; an explicit old value overrides the new application default.
+For an existing deployment, update any `OPENAI_MODEL` entry in `~/.config/portfolio-news/portfolio-news.env` to `gpt-5.6-sol`; an explicit old value overrides the new application default.
 
 The version-controlled base allowlist is in `portfolio_news/sources.py`. It includes Reuters, AP, Bloomberg, FT, WSJ, BBC, CNBC, major US/UK/EU/French regulators and central banks, and international institutions. Extra configured domains receive the same exact-host-or-subdomain enforcement.
 
@@ -86,104 +86,132 @@ python -m portfolio_news run
 
 A dry run still reads Sheets and makes an OpenAI web-search request. It writes only a run audit row to SQLite and prints Telegram HTML to stdout; Telegram credentials are optional for that command.
 
-## Lightsail installation
+## Lightsail installation without root access
 
-The following assumes Ubuntu, `python3` reports Python 3.9, and this repository is at `/opt/portfolio-news`. If virtual-environment creation is unavailable, install the Ubuntu package that provides `venv` for the server's Python version first.
+The deployment is entirely owned by the Lightsail login account. It uses these locations:
 
-```bash
-python3 --version
-python3 -m venv --help
-sudo adduser --system --group --home /opt/portfolio-news --no-create-home portfolio-news
-sudo install -d -o root -g portfolio-news -m 0750 /etc/portfolio-news
-sudo install -d -o portfolio-news -g portfolio-news -m 0750 /var/lib/portfolio-news
-sudo install -o root -g portfolio-news -m 0640 google-service-account.json /etc/portfolio-news/google_credentials.json
-sudo install -o root -g portfolio-news -m 0640 .env /etc/portfolio-news/portfolio-news.env
-cd /opt/portfolio-news
-sudo python3 -m venv .venv
-sudo .venv/bin/python -m pip install -r requirements.txt
-sudo .venv/bin/python -m pip install --no-deps .
-sudo chown -R root:root .venv
-sudo chmod -R go-w .venv
-```
+- application and virtual environment: `~/portfolio-news`
+- private configuration and Google credentials: `~/.config/portfolio-news`
+- SQLite, the run lock, cron log, and backups: `~/.local/state/portfolio-news`
 
-The service runs as the unprivileged `portfolio-news` user. Configuration and Google credentials are root-owned and readable only by the service group. The installed virtual environment is root-owned, while SQLite and the lock file are writable only beneath `/var/lib/portfolio-news`. The systemd unit also enables filesystem and privilege hardening.
-
-Test first:
+The following assumes Ubuntu, this repository is at `~/portfolio-news`, and `python3.9` includes the `venv` module. No command requires `sudo`. If `python3.9 -m venv` is unavailable, use another user-managed Python 3.9 installation or ask the server administrator to provide it.
 
 ```bash
-sudo -u portfolio-news /bin/sh -c 'set -a; . /etc/portfolio-news/portfolio-news.env; set +a; cd /var/lib/portfolio-news; exec /opt/portfolio-news/.venv/bin/python -m portfolio_news run --dry-run'
-sudo -u portfolio-news /bin/sh -c 'set -a; . /etc/portfolio-news/portfolio-news.env; set +a; cd /var/lib/portfolio-news; exec /opt/portfolio-news/.venv/bin/python -m portfolio_news run'
+python3.9 --version
+python3.9 -m venv --help
+cd "$HOME/portfolio-news"
+umask 077
+install -d -m 0700 "$HOME/.config/portfolio-news"
+install -d -m 0700 "$HOME/.local/state/portfolio-news/backups"
+install -m 0600 google-service-account.json "$HOME/.config/portfolio-news/google_credentials.json"
+install -m 0600 .env.example "$HOME/.config/portfolio-news/portfolio-news.env"
+vi "$HOME/.config/portfolio-news/portfolio-news.env"
+python3.9 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python -m pip install --no-deps .
 ```
 
-Install and activate the timer:
+Replace every `replace-me` value in the private environment file. Its default paths already point to the user-owned configuration and state directories. Keep both secret files at mode `0600`.
+
+Test the exact command used by the cron fallback, first without delivery and then live:
 
 ```bash
-sudo install -o root -g root -m 0644 deploy/portfolio-news.service /etc/systemd/system/portfolio-news.service
-sudo install -o root -g root -m 0644 deploy/portfolio-news.timer /etc/systemd/system/portfolio-news.timer
-sudo systemd-analyze verify /etc/systemd/system/portfolio-news.service /etc/systemd/system/portfolio-news.timer
-sudo systemctl daemon-reload
-sudo systemd-analyze calendar 'Mon..Fri *-*-* 08:00:00 Europe/Paris'
-sudo systemctl enable --now portfolio-news.timer
-systemctl list-timers portfolio-news.timer
+cd "$HOME/portfolio-news"
+deploy/run.sh --dry-run
+deploy/run.sh
 ```
 
-Confirm that `NEXT` is the next weekday at 08:00 Paris time. `Persistent=true` makes a missed firing run after the host resumes.
+### Scheduling
 
-If the installed systemd cannot parse the timezone-qualified calendar, do not enable the timer. Install the fallback with `sudo install -o root -g root -m 0644 deploy/portfolio-news.cron /etc/cron.d/portfolio-news`. It evaluates Paris wall time explicitly each minute and asks systemd to start the same hardened service, so it remains DST-aware without relying on host timezone or `CRON_TZ` support. Inspect the next execution in the cron logs.
+Choose exactly one scheduler so the digest is not launched twice.
+
+User-level systemd is suitable only when the account's user manager remains active after logout. Check this without elevated privileges:
+
+```bash
+loginctl show-user "$USER" -p Linger
+```
+
+If it reports `Linger=yes`, install and activate the user timer:
+
+```bash
+install -d -m 0700 "$HOME/.config/systemd/user"
+install -m 0644 deploy/portfolio-news.service "$HOME/.config/systemd/user/portfolio-news.service"
+install -m 0644 deploy/portfolio-news.timer "$HOME/.config/systemd/user/portfolio-news.timer"
+systemd-analyze --user verify "$HOME/.config/systemd/user/portfolio-news.service" "$HOME/.config/systemd/user/portfolio-news.timer"
+systemctl --user daemon-reload
+systemd-analyze calendar 'Mon..Fri *-*-* 08:00:00 Europe/Paris'
+systemctl --user enable --now portfolio-news.timer
+systemctl --user list-timers portfolio-news.timer --all
+```
+
+Confirm that `NEXT` is the next weekday at 08:00 Paris time. `Persistent=true` makes a missed firing run when the persistent user manager resumes. Enabling lingering is an administrator-controlled server setting; the deployment does not attempt to change it.
+
+The unit retains process-level hardening that works in an unprivileged user manager. Secret and state isolation comes from the account-owned `0600` files and `0700` directories; it does not rely on privileged filesystem namespaces.
+
+If `Linger=no`, systemd lacks timezone-qualified calendar support, or no user manager is available, use the account's existing crontab instead. The helper preserves unrelated entries and can be run repeatedly:
+
+```bash
+systemctl --user disable --now portfolio-news.timer 2>/dev/null || true
+deploy/manage-cron.sh install
+crontab -l
+```
+
+The cron entry checks Paris wall time explicitly each minute and launches once at 08:00 Monday–Friday, including across daylight-saving changes. It does not depend on the server timezone or `CRON_TZ`. The server's cron daemon must already be running; starting or installing that daemon requires the administrator.
 
 ## Operations
 
 Manual run and log inspection:
 
 ```bash
-sudo systemctl start portfolio-news.service
-sudo journalctl -u portfolio-news.service -n 200 --no-pager
-sudo journalctl -u portfolio-news.service -f
+cd "$HOME/portfolio-news"
+deploy/run.sh
+systemctl --user start portfolio-news.service
+journalctl --user -u portfolio-news.service -n 200 --no-pager
+journalctl --user -u portfolio-news.service -f
+tail -f "$HOME/.local/state/portfolio-news/cron.log"
 ```
 
-The application emits JSON logs. Known API keys and bot tokens are redacted; do not place secrets inside publisher-domain or path settings.
+Use only the commands for the active scheduler. The application emits JSON logs. Known API keys and bot tokens are redacted; do not place secrets inside publisher-domain or path settings.
 
-Back up SQLite while no run is active:
+Back up SQLite with its online backup API:
 
 ```bash
-sudo systemctl stop portfolio-news.timer
-sudo systemctl stop portfolio-news.service
-sudo install -d -o root -g root -m 0700 /var/backups/portfolio-news
-sudo /opt/portfolio-news/.venv/bin/python -c 'import datetime,sqlite3; name="/var/backups/portfolio-news/portfolio-news-"+datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")+".db"; source=sqlite3.connect("/var/lib/portfolio-news/portfolio_news.db"); target=sqlite3.connect(name); source.backup(target); target.close(); source.close()'
-sudo systemctl start portfolio-news.timer
+"$HOME/portfolio-news/.venv/bin/python" -c 'import datetime, sqlite3; from pathlib import Path; state = Path.home() / ".local/state/portfolio-news"; name = state / "backups" / ("portfolio-news-" + datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ") + ".db"); source = sqlite3.connect(str(state / "portfolio_news.db")); target = sqlite3.connect(str(name)); source.backup(target); target.close(); source.close(); print(name)'
 ```
 
-Restore only with the timer and service stopped, and retain the current database file until the restored copy has been verified. SQLite's online backup API produces a consistent database even when WAL mode is enabled.
+SQLite's online backup API produces a consistent database even when WAL mode is enabled. Before restoring, disable the active scheduler with `systemctl --user disable --now portfolio-news.timer` or `deploy/manage-cron.sh remove`, make sure no manual run is active, and retain the current database until the restored copy is verified.
 
 Review cumulative OpenAI usage recorded per run:
 
 ```bash
-sudo -u portfolio-news /opt/portfolio-news/.venv/bin/python -c 'import sqlite3; db=sqlite3.connect("/var/lib/portfolio-news/portfolio_news.db"); print(db.execute("select count(*),sum(input_tokens),sum(output_tokens),sum(web_search_calls) from (select input_tokens,output_tokens,web_search_calls from prepared_digests union all select input_tokens,output_tokens,web_search_calls from runs where dry_run=1 and status=\"dry_run\")").fetchone())'
+"$HOME/portfolio-news/.venv/bin/python" -c 'import sqlite3; from pathlib import Path; db = sqlite3.connect(str(Path.home() / ".local/state/portfolio-news/portfolio_news.db")); print(db.execute("select count(*),sum(input_tokens),sum(output_tokens),sum(web_search_calls) from (select input_tokens,output_tokens,web_search_calls from prepared_digests union all select input_tokens,output_tokens,web_search_calls from runs where dry_run=1 and status=\"dry_run\")").fetchone())'
 ```
 
 Upgrade with a recorded rollback point:
 
 ```bash
-sudo systemctl stop portfolio-news.timer
-cd /opt/portfolio-news
+systemctl --user stop portfolio-news.timer 2>/dev/null || true
+cd "$HOME/portfolio-news"
 git rev-parse HEAD
 git pull --ff-only
-sudo .venv/bin/python -m pip install -r requirements.txt
-sudo .venv/bin/python -m pip install --no-deps --force-reinstall .
-sudo -u portfolio-news /bin/sh -c 'set -a; . /etc/portfolio-news/portfolio-news.env; set +a; cd /var/lib/portfolio-news; exec /opt/portfolio-news/.venv/bin/python -m portfolio_news run --dry-run'
-sudo systemctl start portfolio-news.timer
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python -m pip install --no-deps --force-reinstall .
+deploy/run.sh --dry-run
+systemctl --user start portfolio-news.timer 2>/dev/null || true
 ```
 
-Rollback code by replacing `<previous-commit>` with the recorded revision, reinstalling the pinned environment, and running a dry run before re-enabling the timer:
+The cron schedule needs no pause during a quick upgrade because the application lock rejects overlapping launches. If the upgrade could cross 08:00 Paris time, remove and reinstall it with `deploy/manage-cron.sh remove` and `deploy/manage-cron.sh install`.
+
+Rollback code by replacing `<previous-commit>` with the recorded revision, reinstalling the pinned environment, and running a dry run before restarting the selected scheduler:
 
 ```bash
-sudo systemctl stop portfolio-news.timer
-cd /opt/portfolio-news
+systemctl --user stop portfolio-news.timer 2>/dev/null || true
+cd "$HOME/portfolio-news"
 git switch --detach <previous-commit>
-sudo .venv/bin/python -m pip install -r requirements.txt
-sudo .venv/bin/python -m pip install --no-deps --force-reinstall .
-sudo -u portfolio-news /bin/sh -c 'set -a; . /etc/portfolio-news/portfolio-news.env; set +a; cd /var/lib/portfolio-news; exec /opt/portfolio-news/.venv/bin/python -m portfolio_news run --dry-run'
-sudo systemctl start portfolio-news.timer
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python -m pip install --no-deps --force-reinstall .
+deploy/run.sh --dry-run
+systemctl --user start portfolio-news.timer 2>/dev/null || true
 ```
 
 Database rows are retained indefinitely. Backups should be copied off the Lightsail instance according to the server's existing backup policy.
