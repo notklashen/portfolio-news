@@ -57,6 +57,7 @@ class FakeStatusError(Exception):
 
 
 def response_for(digest, source_url):
+    urls = source_url if isinstance(source_url, list) else [source_url]
     return SimpleNamespace(
         output_parsed=digest,
         output_text="",
@@ -67,7 +68,8 @@ def response_for(digest, source_url):
                 "type": "web_search_call",
                 "action": {
                     "sources": [
-                        {"type": "url", "title": "Source", "url": source_url, "extra": "kept"}
+                        {"type": "url", "title": "Source", "url": url, "extra": "kept"}
+                        for url in urls
                     ]
                 },
             }
@@ -75,14 +77,13 @@ def response_for(digest, source_url):
     )
 
 
-def test_uses_one_structured_low_context_responses_request(story_factory):
+def test_uses_one_structured_unrestricted_responses_request(story_factory):
     story = story_factory(publication_date=END.date())
     response = response_for(ResearchDigest(stories=[story]), story.url)
     client = FakeClient(response)
     researcher = OpenAIResearcher(
         "key",
         model="gpt-5.6-sol",
-        allowed_domains=("reuters.com",),
         client=client,
     )
     result = researcher.research(
@@ -98,12 +99,15 @@ def test_uses_one_structured_low_context_responses_request(story_factory):
     assert call["model"] == "gpt-5.6-sol"
     assert call["reasoning"] == {"effort": "low"}
     assert call["tools"][0]["type"] == "web_search"
-    assert call["tools"][0]["search_context_size"] == "low"
-    assert call["tools"][0]["filters"]["allowed_domains"] == ["reuters.com"]
+    assert call["tools"][0]["search_context_size"] == "medium"
+    assert "filters" not in call["tools"][0]
     assert call["include"] == ["web_search_call.action.sources"]
     assert call["text_format"] is ResearchDigest
     assert call["text"] == {"verbosity": "low"}
     assert call["store"] is False
+    assert "Mention every supplied holding" in call["input"][0]["content"]
+    assert "NASDAQ:GOOG" in call["input"][1]["content"]
+    assert "Recap cutoff" in call["input"][1]["content"]
 
 
 def test_pinned_sdk_serializes_strict_schema_and_web_search_contract():
@@ -147,8 +151,7 @@ def test_pinned_sdk_serializes_strict_schema_and_web_search_contract():
         tools=[
             {
                 "type": "web_search",
-                "search_context_size": "low",
-                "filters": {"allowed_domains": ["reuters.com"]},
+                "search_context_size": "medium",
             }
         ],
         include=["web_search_call.action.sources"],
@@ -160,25 +163,22 @@ def test_pinned_sdk_serializes_strict_schema_and_web_search_contract():
     assert response.output_parsed == ResearchDigest()
     assert captured["body"]["tools"][0] == {
         "type": "web_search",
-        "search_context_size": "low",
-        "filters": {"allowed_domains": ["reuters.com"]},
+        "search_context_size": "medium",
     }
     assert captured["body"]["text"]["format"]["strict"] is True
     assert captured["body"]["text"]["verbosity"] == "low"
 
 
-def test_rejects_non_allowlisted_story(story_factory):
+def test_accepts_consulted_source_outside_legacy_allowlist(story_factory):
     story = story_factory(
         url="https://untrusted.example/news/item", publication_date=END.date()
     )
     client = FakeClient(response_for(ResearchDigest(stories=[story]), story.url))
-    researcher = OpenAIResearcher(
-        "key", allowed_domains=("reuters.com",), client=client
-    )
+    researcher = OpenAIResearcher("key", client=client)
     result = researcher.research(
         ["NASDAQ:GOOG"], lookback_start=START, lookback_end=END, recent_history=[]
     )
-    assert result.digest.stories == []
+    assert result.digest.stories == [story]
 
 
 def test_rejects_story_not_in_complete_consulted_sources(story_factory):
@@ -186,13 +186,11 @@ def test_rejects_story_not_in_complete_consulted_sources(story_factory):
     response = response_for(
         ResearchDigest(stories=[story]), "https://www.reuters.com/different-story"
     )
-    researcher = OpenAIResearcher(
-        "key", allowed_domains=("reuters.com",), client=FakeClient(response)
-    )
-    result = researcher.research(
-        ["NASDAQ:GOOG"], lookback_start=START, lookback_end=END, recent_history=[]
-    )
-    assert not result.digest.stories
+    researcher = OpenAIResearcher("key", client=FakeClient(response))
+    with pytest.raises(ResearchError, match="absent from consulted"):
+        researcher.research(
+            ["NASDAQ:GOOG"], lookback_start=START, lookback_end=END, recent_history=[]
+        )
 
 
 def test_malformed_structured_output_fails_clearly():
@@ -203,9 +201,7 @@ def test_malformed_structured_output_fails_clearly():
         usage=None,
         id="resp_bad",
     )
-    researcher = OpenAIResearcher(
-        "key", allowed_domains=("reuters.com",), client=FakeClient(response)
-    )
+    researcher = OpenAIResearcher("key", client=FakeClient(response))
     with pytest.raises(ResearchError, match="malformed structured"):
         researcher.research(
             ["NASDAQ:GOOG"], lookback_start=START, lookback_end=END, recent_history=[]
@@ -216,9 +212,7 @@ def test_sdk_validation_error_is_reported_as_malformed_output():
     try:
         ResearchDigest.model_validate({"stories": "not-a-list"})
     except Exception as validation_error:
-        researcher = OpenAIResearcher(
-            "key", allowed_domains=("reuters.com",), client=FakeClient(validation_error)
-        )
+        researcher = OpenAIResearcher("key", client=FakeClient(validation_error))
     with pytest.raises(ResearchError, match="malformed structured"):
         researcher.research(
             ["NASDAQ:GOOG"], lookback_start=START, lookback_end=END, recent_history=[]
@@ -234,32 +228,61 @@ def test_story_without_consulted_source_is_rejected(story_factory):
         usage=None,
         output=[],
     )
-    researcher = OpenAIResearcher(
-        "key", allowed_domains=("reuters.com",), client=FakeClient(response)
-    )
+    researcher = OpenAIResearcher("key", client=FakeClient(response))
+    with pytest.raises(ResearchError, match="did not include consulted"):
+        researcher.research(
+            ["NASDAQ:GOOG"], lookback_start=START, lookback_end=END, recent_history=[]
+        )
+
+
+def test_rejects_unknown_ticker(story_factory):
+    story = story_factory(affected_tickers=["NASDAQ:MSFT"], publication_date=END.date())
+    response = response_for(ResearchDigest(stories=[story]), story.url)
+    researcher = OpenAIResearcher("key", client=FakeClient(response))
+    with pytest.raises(ResearchError, match="unknown ticker"):
+        researcher.research(
+            ["NASDAQ:GOOG"], lookback_start=START, lookback_end=END, recent_history=[]
+        )
+
+
+def test_allows_context_source_outside_daily_window(story_factory):
+    story = story_factory(publication_date=START.date().replace(day=24))
+    response = response_for(ResearchDigest(stories=[story]), story.url)
+    researcher = OpenAIResearcher("key", client=FakeClient(response))
     result = researcher.research(
         ["NASDAQ:GOOG"], lookback_start=START, lookback_end=END, recent_history=[]
     )
-    assert result.digest.stories == []
+    assert result.digest.stories == [story]
 
 
-def test_rejects_unknown_ticker_and_old_publication(story_factory):
-    stories = [
-        story_factory(affected_tickers=["NASDAQ:MSFT"], publication_date=END.date()),
-        story_factory(
-            url="https://reuters.com/old",
-            event_key="old-event",
-            publication_date=START.date().replace(day=24),
-        ),
+def test_rejects_missing_holding_coverage(story_factory):
+    story = story_factory(publication_date=END.date())
+    response = response_for(ResearchDigest(stories=[story]), story.url)
+    researcher = OpenAIResearcher("key", client=FakeClient(response))
+    with pytest.raises(ResearchError, match="omitted holding.*MSFT"):
+        researcher.research(
+            ["NASDAQ:GOOG", "NASDAQ:MSFT"],
+            lookback_start=START,
+            lookback_end=END,
+            recent_history=[],
+        )
+
+
+def test_validates_all_paragraph_citations_against_consulted_sources(story_factory):
+    second_url = "https://finance.example/quote/goog"
+    story = story_factory(
+        publication_date=END.date(),
+        citations=[{"publisher": "Finance Example", "url": second_url}],
+    )
+    response = response_for(ResearchDigest(stories=[story]), [story.url, second_url])
+    researcher = OpenAIResearcher("key", client=FakeClient(response))
+    result = researcher.research(
+        ["NASDAQ:GOOG"], lookback_start=START, lookback_end=END, recent_history=[]
+    )
+    assert [citation.url for citation in result.digest.stories[0].all_citations] == [
+        story.url,
+        second_url,
     ]
-    response = response_for(ResearchDigest(stories=stories), stories[0].url)
-    researcher = OpenAIResearcher(
-        "key", allowed_domains=("reuters.com",), client=FakeClient(response)
-    )
-    result = researcher.research(
-        ["NASDAQ:GOOG"], lookback_start=START, lookback_end=END, recent_history=[]
-    )
-    assert result.digest.stories == []
 
 
 def test_openai_rate_limit_is_retried(monkeypatch, story_factory):
@@ -271,9 +294,7 @@ def test_openai_rate_limit_is_retried(monkeypatch, story_factory):
         "retry_call",
         lambda function, **kwargs: real_retry_call(function, sleep=lambda _: None, **kwargs),
     )
-    researcher = OpenAIResearcher(
-        "key", allowed_domains=("reuters.com",), attempts=2, client=client
-    )
+    researcher = OpenAIResearcher("key", attempts=2, client=client)
     result = researcher.research(
         ["NASDAQ:GOOG"], lookback_start=START, lookback_end=END, recent_history=[]
     )

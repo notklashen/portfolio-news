@@ -15,15 +15,38 @@ class StoryCategory(str, Enum):
     MACRO_GEOPOLITICAL = "macro_geopolitical"
 
 
+def _validate_https_url(value: str) -> str:
+    if any(ord(character) < 32 or ord(character) == 127 for character in value):
+        raise ValueError("url cannot contain control characters")
+    parsed = urlsplit(value)
+    if parsed.scheme.lower() != "https" or not parsed.hostname or parsed.username or parsed.password:
+        raise ValueError("url must be an absolute HTTPS URL without credentials")
+    return value
+
+
+class DigestCitation(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    publisher: str = Field(min_length=2, max_length=120)
+    url: str = Field(min_length=8, max_length=2048)
+
+    @field_validator("url")
+    @classmethod
+    def require_https_url(cls, value: str) -> str:
+        return _validate_https_url(value)
+
+
 class DigestStory(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     category: StoryCategory
+    section: str = Field(default="Portfolio", min_length=2, max_length=80)
     affected_tickers: list[str] = Field(default_factory=list, max_length=50)
     headline: str = Field(min_length=3, max_length=240)
-    relevance_summary: str = Field(min_length=3, max_length=700)
+    relevance_summary: str = Field(min_length=3, max_length=1800)
     publisher: str = Field(min_length=2, max_length=120)
     url: str = Field(min_length=8, max_length=2048)
+    citations: list[DigestCitation] = Field(default_factory=list, max_length=8)
     event_key: str = Field(min_length=3, max_length=180)
     material_update: bool = False
     publication_date: date
@@ -41,12 +64,18 @@ class DigestStory(BaseModel):
     @field_validator("url")
     @classmethod
     def require_https_url(cls, value: str) -> str:
-        if any(ord(character) < 32 or ord(character) == 127 for character in value):
-            raise ValueError("url cannot contain control characters")
-        parsed = urlsplit(value)
-        if parsed.scheme.lower() != "https" or not parsed.hostname or parsed.username or parsed.password:
-            raise ValueError("url must be an absolute HTTPS URL without credentials")
-        return value
+        return _validate_https_url(value)
+
+    @property
+    def all_citations(self) -> list[DigestCitation]:
+        citations = [DigestCitation(publisher=self.publisher, url=self.url), *self.citations]
+        unique: list[DigestCitation] = []
+        seen: set[str] = set()
+        for citation in citations:
+            if citation.url not in seen:
+                unique.append(citation)
+                seen.add(citation.url)
+        return unique
 
     @field_validator("event_key")
     @classmethod
@@ -60,4 +89,4 @@ class DigestStory(BaseModel):
 class ResearchDigest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    stories: list[DigestStory] = Field(default_factory=list, max_length=7)
+    stories: list[DigestStory] = Field(default_factory=list, max_length=12)

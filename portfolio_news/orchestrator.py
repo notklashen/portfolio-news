@@ -10,10 +10,8 @@ from typing import Callable, Optional
 from .config import Settings
 from .history import HistoryStore, PreparedDigest
 from .lock import SingleRunLock
-from .models import ResearchDigest
 from .research import OpenAIResearcher, ResearchResult
 from .sheets import SheetsPortfolioReader
-from .sources import canonicalize_url
 from .telegram import TelegramClient, render_digest
 
 
@@ -72,9 +70,6 @@ class PortfolioNewsOrchestrator:
         self.researcher = researcher or OpenAIResearcher(
             settings.openai_api_key,
             model=settings.openai_model,
-            allowed_domains=settings.allowed_domains,
-            max_portfolio_items=settings.max_portfolio_items,
-            max_macro_items=settings.max_macro_items,
             timeout_seconds=settings.openai_timeout_seconds,
             attempts=settings.max_api_attempts,
         )
@@ -127,7 +122,10 @@ class PortfolioNewsOrchestrator:
                     lookback_end=now,
                     recent_history=recent_history,
                 )
-                digest = self._deduplicate(result.digest)
+                # Daily market performance is intentionally repeatable. Recent history is sent
+                # to the researcher to suppress stale catalyst prose, but quote-source URLs and
+                # daily movement paragraphs are not application-level deduplication keys.
+                digest = result.digest
                 rendered = render_digest(
                     digest,
                     when=now,
@@ -272,39 +270,6 @@ class PortfolioNewsOrchestrator:
             telegram_message_id=message_id,
             reused_prepared_digest=True,
         )
-
-    def _deduplicate(self, digest: ResearchDigest) -> ResearchDigest:
-        accepted = []
-        seen_urls: set[str] = set()
-        seen_events: set[str] = set()
-        for story in digest.stories:
-            canonical = canonicalize_url(story.url)
-            reason: Optional[str] = None
-            if canonical in seen_urls or story.event_key in seen_events:
-                reason = "duplicate_in_digest"
-            elif self.history.url_was_delivered(canonical):
-                reason = "url_already_delivered"
-            else:
-                prior = self.history.latest_event(story.event_key)
-                if prior is not None:
-                    if not story.material_update:
-                        reason = "event_already_delivered"
-                    elif (
-                        " ".join(story.relevance_summary.casefold().split())
-                        == " ".join(str(prior["relevance_summary"]).casefold().split())
-                    ):
-                        reason = "material_update_has_no_new_summary"
-            if reason:
-                self.log.info(
-                    "deduplicated_story",
-                    extra={"reason": reason, "event_key": story.event_key},
-                )
-                continue
-            accepted.append(story)
-            seen_urls.add(canonical)
-            seen_events.add(story.event_key)
-        return ResearchDigest(stories=accepted)
-
 
 def build_orchestrator(settings: Settings) -> PortfolioNewsOrchestrator:
     return PortfolioNewsOrchestrator(settings)

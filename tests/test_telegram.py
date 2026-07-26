@@ -40,21 +40,26 @@ class FakeHTTPClient:
 def test_render_escapes_user_controlled_html_and_keeps_safe_link(story_factory):
     story = story_factory(
         affected_tickers=["<GOOG>&"],
+        section="European <equities> & crypto",
         headline="Earnings <beat> & outlook",
         relevance_summary="A <tag> & material impact.",
         publisher="Reuters & Co",
         url="https://reuters.com/item?a=1&b=2",
+        citations=[
+            {"publisher": "Exchange", "url": "https://exchange.example/quote/goog"}
+        ],
     )
     rendered = render_digest(ResearchDigest(stories=[story]), when=NOW)
-    assert "&lt;GOOG&gt;&amp;" in rendered
+    assert "European &lt;equities&gt; &amp; crypto" in rendered
     assert "Earnings &lt;beat&gt; &amp; outlook" in rendered
     assert 'href="https://reuters.com/item?a=1&amp;b=2"' in rendered
+    assert 'href="https://exchange.example/quote/goog"' in rendered
     assert len(rendered) <= 3500
 
 
 def test_empty_digest_renders_heartbeat():
     rendered = render_digest(ResearchDigest(), when=NOW)
-    assert "No material new portfolio news today" in rendered
+    assert "No verified portfolio market recap is available today" in rendered
     assert "26 July 2026" in rendered
 
 
@@ -78,6 +83,8 @@ def test_render_enforces_configured_length_without_slicing_html(story_factory):
     assert len(rendered) <= 900
     assert rendered.count("<a href=") == rendered.count("</a>")
     assert rendered.count("<b>") == rendered.count("</b>")
+    assert "Headline 0" in rendered
+    assert "Headline 6" in rendered
 
 
 def test_tiny_limit_fails_cleanly():

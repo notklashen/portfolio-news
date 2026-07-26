@@ -1,8 +1,8 @@
 # Portfolio News
 
-An outbound-only Telegram bot that reads a Google Sheets portfolio, researches current material news with OpenAI web search, and sends one concise weekday digest. It does not trade, calculate portfolio values, handle Telegram commands, or expose a web service.
+An outbound-only Telegram bot that reads a Google Sheets portfolio, researches daily price performance and market context with OpenAI web search, and sends one concise weekday recap. It does not trade, calculate portfolio values, handle Telegram commands, or expose a web service.
 
-The production schedule is 08:00 Monday–Friday in `Europe/Paris`. Delivery history is retained indefinitely in SQLite; only the newest 30 days or 100 stories are included in a research prompt.
+The production schedule is 08:00 Monday–Friday in `Europe/Paris`. Delivery history is retained indefinitely in SQLite; only the newest 30 days or 100 recap paragraphs are included in a research prompt.
 
 ## How one run works
 
@@ -10,11 +10,11 @@ The production schedule is 08:00 Monday–Friday in `Europe/Paris`. Delivery his
 2. Any previously prepared but undelivered digest is retried first, without calling Sheets or OpenAI again.
 3. The workbook title is verified as exactly `PORTFOLIO_TRACKER`. Only the `overview` worksheet is read (matched case-insensitively), and it must contain exactly one case-insensitive `Ticker` cell.
 4. Valid ticker cells beneath that header are trimmed, uppercased, and deduplicated. Other worksheets are ignored; malformed rows in `overview` are logged and skipped.
-5. One OpenAI Responses API request researches the interval since the last successfully covered digest, capped at four days. The request uses `gpt-5.6-sol`, low reasoning, low web-search context, structured output, and a domain allowlist.
-6. Code rejects non-allowlisted sources, previously delivered canonical URLs, and repeated event keys unless the model marks a genuinely changed summary as a material update.
-7. The HTML digest is prepared in SQLite before Telegram is called. Stories become delivered only after Telegram returns a message ID.
+5. One OpenAI Responses API request researches every holding's latest web-verifiable movement plus relevant context. The catalyst lookback is capped at four days; clearly dated historical and upcoming context may fall outside it.
+6. Search is unrestricted so quote sources can cover all asset classes. Code requires every cited URL to appear in the API's complete consulted-source metadata and requires every holding to be represented.
+7. The grouped narrative HTML recap is prepared in SQLite before Telegram is called. It becomes delivered only after Telegram returns a message ID.
 
-An empty result still sends `No material new portfolio news today.` as a health heartbeat.
+An empty result still sends `No verified portfolio market recap is available today.` as a health heartbeat.
 
 ## Google Sheets setup
 
@@ -45,15 +45,13 @@ Copy `.env.example` to `.env`. Required live-run variables are:
 Useful optional controls are:
 
 - `OPENAI_MODEL` (default `gpt-5.6-sol`)
-- `ADDITIONAL_ALLOWED_DOMAINS`, a comma-separated set of issuer or regional publisher domains
-- `MAX_PORTFOLIO_ITEMS` (1–5) and `MAX_MACRO_ITEMS` (0–2)
 - `MAX_HISTORY_ITEMS` and `HISTORY_DAYS`
 - `MAX_TELEGRAM_CHARS` (default 3,500, hard maximum 4,096)
 - API timeouts, retry count, database/lock paths, and `LOG_LEVEL`
 
 For an existing deployment, update any `OPENAI_MODEL` entry in `~/.config/portfolio-news/portfolio-news.env` to `gpt-5.6-sol`; an explicit old value overrides the new application default.
 
-The version-controlled base allowlist is in `portfolio_news/sources.py`. It includes Reuters, AP, Bloomberg, FT, WSJ, BBC, CNBC, major US/UK/EU/French regulators and central banks, and international institutions. Extra configured domains receive the same exact-host-or-subdomain enforcement.
+Web search has no domain filter. The research prompt prefers official exchanges, issuer pages, established quote services, and reputable financial publishers; social posts, scraped snippets, rumors, and low-quality aggregators are prohibited. Every rendered citation must be a direct HTTPS URL returned in the consulted-source metadata.
 
 ## Local development
 
@@ -228,6 +226,6 @@ Database rows are retained indefinitely. Backups should be copied off the Lights
 
 - Google, OpenAI, and Telegram calls use bounded exponential retries for timeouts, rate limits, and transient 5xx responses.
 - A Google title/header error or malformed OpenAI structured response fails clearly and sends nothing.
-- Individual malformed ticker rows and rejected research stories are logged without discarding valid holdings or valid stories.
+- Individual malformed ticker rows are logged and skipped. A recap that omits a valid holding, cites an unconsulted URL, or returns malformed structured output fails without sending.
 - If Telegram fails, the rendered digest remains `prepared`. The next live run sends that exact content before doing any new research, avoiding a second research charge.
-- URLs are canonicalized before exact deduplication. Stable event keys and recent summaries suppress the same event across publishers; a repeat requires both `material_update=true` and changed relevance text.
+- Daily movement paragraphs may recur even when a quote URL is reused. Recent recap context is supplied to the model so stale catalysts are suppressed while daily price coverage remains complete.

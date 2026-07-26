@@ -90,13 +90,13 @@ def test_success_persists_delivery_and_usage(settings_factory, story_factory):
     assert len(telegram.messages) == 1
 
 
-def test_empty_news_sends_heartbeat(settings_factory):
+def test_empty_recap_sends_unavailable_heartbeat(settings_factory):
     orchestrator, history, _, _, telegram = make_orchestrator(
         settings_factory(), [ResearchDigest()]
     )
     outcome = orchestrator.run()
     assert outcome.story_count == 0
-    assert "No material new portfolio news today" in telegram.messages[0]
+    assert "No verified portfolio market recap is available today" in telegram.messages[0]
     assert history.delivered_story_count() == 0
     assert history.last_successful_coverage_end() == NOW
 
@@ -131,7 +131,7 @@ def test_telegram_failure_reuses_prepared_digest_without_research(
     assert usage_rows == [("failed", 120, 1), ("success", 0, 0)]
 
 
-def test_successful_rerun_does_not_redeliver_same_url(
+def test_successful_rerun_redelivers_daily_movement_with_same_quote_url(
     settings_factory, story_factory
 ):
     story = story_factory(publication_date=NOW.date())
@@ -141,12 +141,12 @@ def test_successful_rerun_does_not_redeliver_same_url(
     )
     orchestrator.run()
     second = orchestrator.run()
-    assert second.story_count == 0
-    assert "No material new portfolio news today" in telegram.messages[1]
-    assert history.delivered_story_count() == 1
+    assert second.story_count == 1
+    assert "Portfolio recap" in telegram.messages[1]
+    assert history.delivered_story_count() == 2
 
 
-def test_same_event_different_publisher_requires_material_update(
+def test_daily_recaps_are_not_application_deduplicated(
     settings_factory, story_factory
 ):
     first = story_factory(publication_date=NOW.date())
@@ -171,13 +171,13 @@ def test_same_event_different_publisher_requires_material_update(
         ],
     )
     orchestrator.run()
-    assert orchestrator.run().story_count == 0
     assert orchestrator.run().story_count == 1
-    assert history.delivered_story_count() == 2
+    assert orchestrator.run().story_count == 1
+    assert history.delivered_story_count() == 3
     assert len(researcher.calls) == 3
 
 
-def test_material_update_flag_without_changed_summary_is_suppressed(
+def test_unchanged_daily_recap_is_still_delivered(
     settings_factory, story_factory
 ):
     first = story_factory(publication_date=NOW.date())
@@ -191,8 +191,8 @@ def test_material_update_flag_without_changed_summary_is_suppressed(
         [ResearchDigest(stories=[first]), ResearchDigest(stories=[unchanged])],
     )
     orchestrator.run()
-    assert orchestrator.run().story_count == 0
-    assert history.delivered_story_count() == 1
+    assert orchestrator.run().story_count == 1
+    assert history.delivered_story_count() == 2
 
 
 def test_dry_run_never_prepares_or_delivers(settings_factory, story_factory):

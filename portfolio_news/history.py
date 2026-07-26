@@ -140,6 +140,26 @@ class HistoryStore:
                     ON delivered_stories(event_key, delivered_at DESC);
                 CREATE INDEX IF NOT EXISTS delivered_stories_delivered_at
                     ON delivered_stories(delivered_at DESC);
+
+                CREATE TABLE IF NOT EXISTS delivered_recaps (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    prepared_digest_id INTEGER NOT NULL,
+                    delivered_at TEXT NOT NULL,
+                    section TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    tickers_json TEXT NOT NULL,
+                    headline TEXT NOT NULL,
+                    relevance_summary TEXT NOT NULL,
+                    citations_json TEXT NOT NULL,
+                    event_key TEXT NOT NULL,
+                    material_update INTEGER NOT NULL DEFAULT 0,
+                    telegram_message_id INTEGER NOT NULL,
+                    openai_response_id TEXT,
+                    FOREIGN KEY (prepared_digest_id) REFERENCES prepared_digests(id)
+                );
+
+                CREATE INDEX IF NOT EXISTS delivered_recaps_delivered_at
+                    ON delivered_recaps(delivered_at DESC);
                 """
             )
 
@@ -302,6 +322,33 @@ class HistoryStore:
             for story in digest.stories:
                 connection.execute(
                     """
+                    INSERT INTO delivered_recaps(
+                        prepared_digest_id, delivered_at, section, category, tickers_json,
+                        headline, relevance_summary, citations_json, event_key,
+                        material_update, telegram_message_id, openai_response_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        prepared_id,
+                        delivered_iso,
+                        story.section,
+                        story.category.value,
+                        json.dumps(story.affected_tickers, separators=(",", ":")),
+                        story.headline,
+                        story.relevance_summary,
+                        json.dumps(
+                            [citation.model_dump() for citation in story.all_citations],
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        ),
+                        story.event_key,
+                        int(story.material_update),
+                        telegram_message_id,
+                        row["openai_response_id"],
+                    ),
+                )
+                connection.execute(
+                    """
                     INSERT OR IGNORE INTO delivered_stories(
                         prepared_digest_id, delivered_at, category, tickers_json, headline,
                         relevance_summary, publisher, url, canonical_url, publication_date,
@@ -350,18 +397,49 @@ class HistoryStore:
     def recent_delivered(self, *, days: int = 30, limit: int = 100) -> list[dict[str, Any]]:
         cutoff = to_utc_iso(utc_now() - timedelta(days=days))
         with self._connection() as connection:
-            rows = connection.execute(
+            recap_rows = connection.execute(
                 """
-                SELECT delivered_at, category, tickers_json, headline, relevance_summary,
-                       publisher, canonical_url, publication_date, event_key, material_update
-                FROM delivered_stories
+                SELECT delivered_at, section, category, tickers_json, headline,
+                       relevance_summary, citations_json, event_key, material_update
+                FROM delivered_recaps
                 WHERE delivered_at >= ?
                 ORDER BY delivered_at DESC, id DESC
                 LIMIT ?
                 """,
                 (cutoff, limit),
             ).fetchall()
-        return [
+            remaining = max(0, limit - len(recap_rows))
+            legacy_rows = connection.execute(
+                """
+                SELECT ds.delivered_at, ds.category, ds.tickers_json, ds.headline,
+                       ds.relevance_summary, ds.publisher, ds.canonical_url,
+                       ds.publication_date, ds.event_key, ds.material_update
+                FROM delivered_stories AS ds
+                WHERE ds.delivered_at >= ?
+                  AND NOT EXISTS (
+                      SELECT 1 FROM delivered_recaps AS dr
+                      WHERE dr.prepared_digest_id = ds.prepared_digest_id
+                  )
+                ORDER BY ds.delivered_at DESC, ds.id DESC
+                LIMIT ?
+                """,
+                (cutoff, remaining),
+            ).fetchall()
+        recaps = [
+            {
+                "delivered_at": row["delivered_at"],
+                "section": row["section"],
+                "category": row["category"],
+                "affected_tickers": json.loads(row["tickers_json"]),
+                "headline": row["headline"],
+                "relevance_summary": row["relevance_summary"],
+                "citations": json.loads(row["citations_json"]),
+                "event_key": row["event_key"],
+                "material_update": bool(row["material_update"]),
+            }
+            for row in recap_rows
+        ]
+        legacy = [
             {
                 "delivered_at": row["delivered_at"],
                 "category": row["category"],
@@ -374,8 +452,9 @@ class HistoryStore:
                 "event_key": row["event_key"],
                 "material_update": bool(row["material_update"]),
             }
-            for row in rows
+            for row in legacy_rows
         ]
+        return [*recaps, *legacy][:limit]
 
     def url_was_delivered(self, canonical_url: str) -> bool:
         with self._connection() as connection:
@@ -401,5 +480,15 @@ class HistoryStore:
 
     def delivered_story_count(self) -> int:
         with self._connection() as connection:
-            row = connection.execute("SELECT COUNT(*) AS count FROM delivered_stories").fetchone()
+            row = connection.execute(
+                """
+                SELECT
+                    (SELECT COUNT(*) FROM delivered_recaps) +
+                    (SELECT COUNT(*) FROM delivered_stories AS ds
+                     WHERE NOT EXISTS (
+                         SELECT 1 FROM delivered_recaps AS dr
+                         WHERE dr.prepared_digest_id = ds.prepared_digest_id
+                     )) AS count
+                """
+            ).fetchone()
         return int(row["count"])

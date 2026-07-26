@@ -9,7 +9,6 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import os
 
 from .errors import ConfigurationError
-from .sources import DEFAULT_ALLOWED_DOMAINS, normalize_domain
 
 
 def _integer(env: Mapping[str, str], name: str, default: int, minimum: int, maximum: int) -> int:
@@ -53,9 +52,6 @@ class Settings:
     database_path: Path
     lock_file: Path
     openai_model: str
-    allowed_domains: tuple[str, ...]
-    max_portfolio_items: int
-    max_macro_items: int
     max_history_items: int
     history_days: int
     max_telegram_chars: int
@@ -83,21 +79,6 @@ class Settings:
         if validate_files and not credentials_file.is_file():
             raise ConfigurationError(
                 f"GOOGLE_CREDENTIALS_FILE does not exist or is not a file: {credentials_file}"
-            )
-
-        additional: list[str] = []
-        for raw_domain in env.get("ADDITIONAL_ALLOWED_DOMAINS", "").split(","):
-            if raw_domain.strip():
-                try:
-                    additional.append(normalize_domain(raw_domain))
-                except ValueError as exc:
-                    raise ConfigurationError(
-                        f"Invalid domain in ADDITIONAL_ALLOWED_DOMAINS: {raw_domain.strip()}"
-                    ) from exc
-        allowed_domains = tuple(dict.fromkeys((*DEFAULT_ALLOWED_DOMAINS, *additional)))
-        if len(allowed_domains) > 100:
-            raise ConfigurationError(
-                "The combined source allowlist cannot exceed the web_search limit of 100 domains"
             )
 
         token = env.get("TELEGRAM_BOT_TOKEN", "").strip() or None
@@ -133,9 +114,6 @@ class Settings:
                 )
             ).expanduser(),
             openai_model=env.get("OPENAI_MODEL", "gpt-5.6-sol").strip() or "gpt-5.6-sol",
-            allowed_domains=allowed_domains,
-            max_portfolio_items=_integer(env, "MAX_PORTFOLIO_ITEMS", 5, 1, 5),
-            max_macro_items=_integer(env, "MAX_MACRO_ITEMS", 2, 0, 2),
             max_history_items=_integer(env, "MAX_HISTORY_ITEMS", 100, 1, 500),
             history_days=_integer(env, "HISTORY_DAYS", 30, 1, 90),
             max_telegram_chars=_integer(env, "MAX_TELEGRAM_CHARS", 3500, 500, 4096),

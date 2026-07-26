@@ -8,7 +8,7 @@ import logging
 from typing import Any, Optional
 
 from .errors import TelegramError, TelegramRenderError
-from .models import DigestStory, ResearchDigest, StoryCategory
+from .models import DigestStory, ResearchDigest
 from .retrying import is_transient_error, retry_call
 
 
@@ -35,60 +35,84 @@ def _truncate(value: str, limit: int) -> str:
     return compact[: max(1, limit - 1)].rstrip() + "…"
 
 
-def _story_block(story: DigestStory) -> str:
-    tickers = ", ".join(story.affected_tickers) if story.affected_tickers else "Portfolio-wide"
-    ticker_label = html.escape(_truncate(tickers, 100))
-    headline = html.escape(_truncate(story.headline, 150))
-    relevance = html.escape(_truncate(story.relevance_summary, 240))
-    publisher = html.escape(_truncate(story.publisher, 70))
-    url = html.escape(story.url, quote=True)
+def _story_block(
+    story: DigestStory,
+    *,
+    headline_limit: int,
+    summary_limit: Optional[int],
+    citation_limit: int,
+) -> str:
+    headline = html.escape(_truncate(story.headline, headline_limit))
+    summary = story.relevance_summary
+    if summary_limit is not None:
+        summary = _truncate(summary, summary_limit)
+    relevance = html.escape(" ".join(summary.split()))
     update = " <i>Material update</i>" if story.material_update else ""
-    return (
-        f"<b>{ticker_label}</b> — {headline}{update}\n"
-        f"{relevance}\n"
-        f'<a href="{url}">{publisher}</a>'
-    )
+    links = []
+    for citation in story.all_citations[:citation_limit]:
+        publisher = html.escape(_truncate(citation.publisher, 45))
+        url = html.escape(citation.url, quote=True)
+        links.append(f'<a href="{url}">{publisher}</a>')
+    citations = f" [{' · '.join(links)}]" if links else ""
+    return f"{headline}{update} {relevance}{citations}"
+
+
+def _render_profile(
+    digest: ResearchDigest,
+    *,
+    heading: str,
+    headline_limit: int,
+    summary_limit: Optional[int],
+    citation_limit: int,
+) -> str:
+    parts = [heading]
+    section_order = list(dict.fromkeys(story.section for story in digest.stories))
+    for section in section_order:
+        stories = [story for story in digest.stories if story.section == section]
+        paragraph = " ".join(
+            _story_block(
+                story,
+                headline_limit=headline_limit,
+                summary_limit=summary_limit,
+                citation_limit=citation_limit,
+            )
+            for story in stories
+        )
+        parts.extend((f"<b>{html.escape(_truncate(section, 80))}</b>", paragraph))
+    return "\n\n".join(parts)
 
 
 def render_digest(digest: ResearchDigest, *, when: datetime, max_chars: int = 3500) -> str:
     date_label = f"{when.day} {_MONTHS[when.month - 1]} {when.year}"
-    heading = f"<b>Portfolio news — {date_label}</b>"
+    heading = f"<b>Portfolio recap — {date_label}</b>"
     if not digest.stories:
-        rendered = heading + "\n\nNo material new portfolio news today."
+        rendered = heading + "\n\nNo verified portfolio market recap is available today."
         if len(rendered) > max_chars:
             raise TelegramRenderError("MAX_TELEGRAM_CHARS is too small for the heartbeat")
         return rendered
 
-    parts = [heading]
-    omitted = 0
-    sections = (
-        (StoryCategory.PORTFOLIO, "Portfolio"),
-        (StoryCategory.MACRO_GEOPOLITICAL, "Macro & geopolitical"),
+    profiles = (
+        (240, None, 8),
+        (220, 900, 4),
+        (200, 600, 3),
+        (180, 400, 2),
+        (160, 260, 1),
+        (120, 140, 1),
+        (80, 60, 1),
+        (35, 20, 1),
     )
-    for category, title in sections:
-        category_stories = [story for story in digest.stories if story.category is category]
-        section_started = False
-        for story in category_stories:
-            additions = []
-            if not section_started:
-                additions.append(f"<b>{title}</b>")
-            additions.append(_story_block(story))
-            candidate = "\n\n".join([*parts, *additions])
-            if len(candidate) <= max_chars:
-                parts.extend(additions)
-                section_started = True
-            else:
-                omitted += 1
-    if len(parts) == 1:
-        raise TelegramRenderError("No digest story can fit within MAX_TELEGRAM_CHARS")
-    rendered = "\n\n".join(parts)
-    if omitted:
-        note = f"\n\n<i>{omitted} additional material item{'s' if omitted != 1 else ''} omitted for length.</i>"
-        if len(rendered) + len(note) <= max_chars:
-            rendered += note
-    if len(rendered) > max_chars or len(rendered) > 4096:
-        raise TelegramRenderError("Rendered Telegram digest exceeds the configured limit")
-    return rendered
+    hard_limit = min(max_chars, 4096)
+    for headline_limit, summary_limit, citation_limit in profiles:
+        rendered = _render_profile(
+            digest,
+            heading=heading,
+            headline_limit=headline_limit,
+            summary_limit=summary_limit,
+            citation_limit=citation_limit,
+        )
+        if len(rendered) <= hard_limit:
+            return rendered
+    raise TelegramRenderError("All portfolio holdings cannot fit within MAX_TELEGRAM_CHARS")
 
 
 class _TelegramHTTPError(Exception):
