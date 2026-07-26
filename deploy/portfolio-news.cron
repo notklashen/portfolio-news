@@ -1,0 +1,3 @@
+# Install only when the host's systemd cannot parse timezone-qualified calendars.
+# Evaluate Paris wall time explicitly, so this does not depend on CRON_TZ support.
+* * * * * root test "$(TZ=Europe/Paris /bin/date +\%H:\%M)" = "08:00" && test "$(TZ=Europe/Paris /bin/date +\%u)" -le 5 && /usr/bin/systemctl start --no-block portfolio-news.service

@@ -1,0 +1,4 @@
+-r requirements.txt
+# Last pytest release supporting Python 3.9.
+pytest==8.4.2
+pytest-cov==7.1.0

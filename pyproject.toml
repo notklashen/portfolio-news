@@ -1,0 +1,33 @@
+[build-system]
+# Flit remains compatible with Python 3.9; current setuptools releases do not.
+requires = ["flit_core==3.12.0"]
+build-backend = "flit_core.buildapi"
+
+[project]
+name = "portfolio-news"
+version = "1.0.0"
+description = "Outbound-only Telegram portfolio news digest"
+readme = "README.md"
+requires-python = ">=3.9,<3.15"
+dependencies = [
+  "google-api-python-client==2.198.0",
+  # google-auth 2.51+ requires Python 3.10.
+  "google-auth==2.50.0",
+  # google-auth-httplib2 0.4+ requires Python 3.10.
+  "google-auth-httplib2==0.3.0",
+  "httplib2==0.32.0",
+  "httpx==0.28.1",
+  "openai==2.48.0",
+  "pydantic==2.13.4",
+]
+
+[project.optional-dependencies]
+test = [
+  # pytest 9+ requires Python 3.10.
+  "pytest==8.4.2",
+  "pytest-cov==7.1.0",
+]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-markers"
+testpaths = ["tests"]

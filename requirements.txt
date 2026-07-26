@@ -1,0 +1,9 @@
+google-api-python-client==2.198.0
+# Last google-auth release supporting Python 3.9.
+google-auth==2.50.0
+# Last google-auth-httplib2 release supporting Python 3.9.
+google-auth-httplib2==0.3.0
+httplib2==0.32.0
+httpx==0.28.1
+openai==2.48.0
+pydantic==2.13.4

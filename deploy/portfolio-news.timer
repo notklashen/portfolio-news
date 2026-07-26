@@ -1,0 +1,12 @@
+[Unit]
+Description=Run portfolio news weekdays at 08:00 Europe/Paris
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 08:00:00 Europe/Paris
+Persistent=true
+AccuracySec=1s
+RandomizedDelaySec=0
+Unit=portfolio-news.service
+
+[Install]
+WantedBy=timers.target

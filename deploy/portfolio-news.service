@@ -1,0 +1,32 @@
+[Unit]
+Description=Portfolio news Telegram digest
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/opt/portfolio-news/.venv/bin/python
+ConditionPathExists=/etc/portfolio-news/portfolio-news.env
+
+[Service]
+Type=oneshot
+User=portfolio-news
+Group=portfolio-news
+WorkingDirectory=/var/lib/portfolio-news
+EnvironmentFile=/etc/portfolio-news/portfolio-news.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/portfolio-news/.venv/bin/python -m portfolio_news run
+StateDirectory=portfolio-news
+StateDirectoryMode=0750
+TimeoutStartSec=30min
+Nice=5
+UMask=0077
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectSystem=strict
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictSUIDSGID=true
+CapabilityBoundingSet=
