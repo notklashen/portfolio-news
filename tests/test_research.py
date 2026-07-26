@@ -97,7 +97,7 @@ def test_uses_one_structured_unrestricted_responses_request(story_factory):
     assert len(client.responses.calls) == 1
     call = client.responses.calls[0]
     assert call["model"] == "gpt-5.6-sol"
-    assert call["reasoning"] == {"effort": "low"}
+    assert call["reasoning"] == {"effort": "medium"}
     assert call["tools"][0]["type"] == "web_search"
     assert call["tools"][0]["search_context_size"] == "medium"
     assert "filters" not in call["tools"][0]
@@ -108,6 +108,7 @@ def test_uses_one_structured_unrestricted_responses_request(story_factory):
     assert "Mention every supplied holding" in call["input"][0]["content"]
     assert "NASDAQ:GOOG" in call["input"][1]["content"]
     assert "Recap cutoff" in call["input"][1]["content"]
+    assert '"exchange_name":"Nasdaq"' in call["input"][1]["content"]
 
 
 def test_pinned_sdk_serializes_strict_schema_and_web_search_contract():
@@ -147,7 +148,7 @@ def test_pinned_sdk_serializes_strict_schema_and_web_search_contract():
     )
     response = client.responses.parse(
         model="gpt-5.6-sol",
-        reasoning={"effort": "low"},
+        reasoning={"effort": "medium"},
         tools=[
             {
                 "type": "web_search",
@@ -283,6 +284,37 @@ def test_validates_all_paragraph_citations_against_consulted_sources(story_facto
         story.url,
         second_url,
     ]
+
+
+def test_ticker_resolution_hints_expand_euronext_codes():
+    assert OpenAIResearcher._ticker_search_hints(["EPA:MC", "AMS:ASML", "HYPE"]) == [
+        {
+            "holding": "EPA:MC",
+            "symbol": "MC",
+            "exchange_code": "EPA",
+            "exchange_name": "Euronext Paris",
+        },
+        {
+            "holding": "AMS:ASML",
+            "symbol": "ASML",
+            "exchange_code": "AMS",
+            "exchange_name": "Euronext Amsterdam",
+        },
+        {"holding": "HYPE", "symbol": "HYPE"},
+    ]
+
+
+def test_rejects_price_only_paragraph_without_relevant_context(story_factory):
+    story = story_factory(
+        headline="Alphabet closed higher.",
+        relevance_summary="No fresh, verified catalyst emerged during the research window.",
+    )
+    response = response_for(ResearchDigest(stories=[story]), story.url)
+    researcher = OpenAIResearcher("key", client=FakeClient(response))
+    with pytest.raises(ResearchError, match="without relevant event context"):
+        researcher.research(
+            ["NASDAQ:GOOG"], lookback_start=START, lookback_end=END, recent_history=[]
+        )
 
 
 def test_openai_rate_limit_is_retried(monkeypatch, story_factory):

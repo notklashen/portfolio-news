@@ -37,7 +37,7 @@ class FakeHTTPClient:
         return response
 
 
-def test_render_escapes_user_controlled_html_and_keeps_safe_link(story_factory):
+def test_render_escapes_user_controlled_html_and_hides_source_links(story_factory):
     story = story_factory(
         affected_tickers=["<GOOG>&"],
         section="European <equities> & crypto",
@@ -52,8 +52,9 @@ def test_render_escapes_user_controlled_html_and_keeps_safe_link(story_factory):
     rendered = render_digest(ResearchDigest(stories=[story]), when=NOW)
     assert "European &lt;equities&gt; &amp; crypto" in rendered
     assert "Earnings &lt;beat&gt; &amp; outlook" in rendered
-    assert 'href="https://reuters.com/item?a=1&amp;b=2"' in rendered
-    assert 'href="https://exchange.example/quote/goog"' in rendered
+    assert "href=" not in rendered
+    assert "Reuters &amp; Co" not in rendered
+    assert "Exchange" not in rendered
     assert len(rendered) <= 3500
 
 
@@ -81,7 +82,7 @@ def test_render_enforces_configured_length_without_slicing_html(story_factory):
         )
     rendered = render_digest(ResearchDigest(stories=stories), when=NOW, max_chars=900)
     assert len(rendered) <= 900
-    assert rendered.count("<a href=") == rendered.count("</a>")
+    assert "<a href=" not in rendered
     assert rendered.count("<b>") == rendered.count("</b>")
     assert "Headline 0" in rendered
     assert "Headline 6" in rendered

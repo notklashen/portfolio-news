@@ -40,7 +40,6 @@ def _story_block(
     *,
     headline_limit: int,
     summary_limit: Optional[int],
-    citation_limit: int,
 ) -> str:
     headline = html.escape(_truncate(story.headline, headline_limit))
     summary = story.relevance_summary
@@ -48,13 +47,7 @@ def _story_block(
         summary = _truncate(summary, summary_limit)
     relevance = html.escape(" ".join(summary.split()))
     update = " <i>Material update</i>" if story.material_update else ""
-    links = []
-    for citation in story.all_citations[:citation_limit]:
-        publisher = html.escape(_truncate(citation.publisher, 45))
-        url = html.escape(citation.url, quote=True)
-        links.append(f'<a href="{url}">{publisher}</a>')
-    citations = f" [{' · '.join(links)}]" if links else ""
-    return f"{headline}{update} {relevance}{citations}"
+    return f"{headline}{update} {relevance}"
 
 
 def _render_profile(
@@ -63,7 +56,6 @@ def _render_profile(
     heading: str,
     headline_limit: int,
     summary_limit: Optional[int],
-    citation_limit: int,
 ) -> str:
     parts = [heading]
     section_order = list(dict.fromkeys(story.section for story in digest.stories))
@@ -74,7 +66,6 @@ def _render_profile(
                 story,
                 headline_limit=headline_limit,
                 summary_limit=summary_limit,
-                citation_limit=citation_limit,
             )
             for story in stories
         )
@@ -92,23 +83,22 @@ def render_digest(digest: ResearchDigest, *, when: datetime, max_chars: int = 35
         return rendered
 
     profiles = (
-        (240, None, 8),
-        (220, 900, 4),
-        (200, 600, 3),
-        (180, 400, 2),
-        (160, 260, 1),
-        (120, 140, 1),
-        (80, 60, 1),
-        (35, 20, 1),
+        (240, None),
+        (220, 900),
+        (200, 600),
+        (180, 400),
+        (160, 260),
+        (120, 140),
+        (80, 60),
+        (35, 20),
     )
     hard_limit = min(max_chars, 4096)
-    for headline_limit, summary_limit, citation_limit in profiles:
+    for headline_limit, summary_limit in profiles:
         rendered = _render_profile(
             digest,
             heading=heading,
             headline_limit=headline_limit,
             summary_limit=summary_limit,
-            citation_limit=citation_limit,
         )
         if len(rendered) <= hard_limit:
             return rendered

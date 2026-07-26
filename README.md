@@ -11,7 +11,7 @@ The production schedule is 08:00 Monday–Friday in `Europe/Paris`. Delivery his
 3. The workbook title is verified as exactly `PORTFOLIO_TRACKER`. Only the `overview` worksheet is read (matched case-insensitively), and it must contain exactly one case-insensitive `Ticker` cell.
 4. Valid ticker cells beneath that header are trimmed, uppercased, and deduplicated. Other worksheets are ignored; malformed rows in `overview` are logged and skipped.
 5. One OpenAI Responses API request researches every holding's latest web-verifiable movement plus relevant context. The catalyst lookback is capped at four days; clearly dated historical and upcoming context may fall outside it.
-6. Search is unrestricted so quote sources can cover all asset classes. Code requires every cited URL to appear in the API's complete consulted-source metadata and requires every holding to be represented.
+6. Search is unrestricted so quote sources can cover all asset classes. Code requires every internally cited URL to appear in the API's complete consulted-source metadata and requires every holding to be represented.
 7. The grouped narrative HTML recap is prepared in SQLite before Telegram is called. It becomes delivered only after Telegram returns a message ID.
 
 An empty result still sends `No verified portfolio market recap is available today.` as a health heartbeat.
@@ -51,7 +51,7 @@ Useful optional controls are:
 
 For an existing deployment, update any `OPENAI_MODEL` entry in `~/.config/portfolio-news/portfolio-news.env` to `gpt-5.6-sol`; an explicit old value overrides the new application default.
 
-Web search has no domain filter. The research prompt prefers official exchanges, issuer pages, established quote services, and reputable financial publishers; social posts, scraped snippets, rumors, and low-quality aggregators are prohibited. Every rendered citation must be a direct HTTPS URL returned in the consulted-source metadata.
+Web search has no domain filter. The research prompt prefers official exchanges, issuer pages, established quote services, and reputable financial publishers; social posts, scraped snippets, rumors, and low-quality aggregators are prohibited. Sources are validated and retained internally but are not rendered in the Telegram recap.
 
 ## Local development
 
