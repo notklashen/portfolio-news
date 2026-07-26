@@ -184,16 +184,16 @@ def test_accepts_consulted_source_outside_legacy_allowlist(story_factory):
     assert result.digest.stories == [story]
 
 
-def test_rejects_story_not_in_complete_consulted_sources(story_factory):
+def test_does_not_reject_citation_absent_from_consulted_sources(story_factory):
     story = story_factory(publication_date=END.date())
     response = response_for(
         ResearchDigest(stories=[story]), "https://www.reuters.com/different-story"
     )
     researcher = OpenAIResearcher("key", client=FakeClient(response))
-    with pytest.raises(ResearchError, match="absent from consulted"):
-        researcher.research(
-            ["NASDAQ:GOOG"], lookback_start=START, lookback_end=END, recent_history=[]
-        )
+    result = researcher.research(
+        ["NASDAQ:GOOG"], lookback_start=START, lookback_end=END, recent_history=[]
+    )
+    assert result.digest.stories == [story]
 
 
 def test_malformed_structured_output_fails_clearly():
@@ -233,7 +233,7 @@ def test_truncated_structured_output_is_reported_clearly():
         )
 
 
-def test_story_without_consulted_source_is_rejected(story_factory):
+def test_story_without_consulted_source_is_accepted(story_factory):
     story = story_factory(publication_date=END.date())
     response = SimpleNamespace(
         output_parsed=ResearchDigest(stories=[story]),
@@ -243,20 +243,20 @@ def test_story_without_consulted_source_is_rejected(story_factory):
         output=[],
     )
     researcher = OpenAIResearcher("key", client=FakeClient(response))
-    with pytest.raises(ResearchError, match="did not include consulted"):
-        researcher.research(
-            ["NASDAQ:GOOG"], lookback_start=START, lookback_end=END, recent_history=[]
-        )
+    result = researcher.research(
+        ["NASDAQ:GOOG"], lookback_start=START, lookback_end=END, recent_history=[]
+    )
+    assert result.digest.stories == [story]
 
 
-def test_rejects_unknown_ticker(story_factory):
+def test_unknown_ticker_is_not_post_validated(story_factory):
     story = story_factory(affected_tickers=["NASDAQ:MSFT"], publication_date=END.date())
     response = response_for(ResearchDigest(stories=[story]), story.url)
     researcher = OpenAIResearcher("key", client=FakeClient(response))
-    with pytest.raises(ResearchError, match="unknown ticker"):
-        researcher.research(
-            ["NASDAQ:GOOG"], lookback_start=START, lookback_end=END, recent_history=[]
-        )
+    result = researcher.research(
+        ["NASDAQ:GOOG"], lookback_start=START, lookback_end=END, recent_history=[]
+    )
+    assert result.digest.stories == [story]
 
 
 def test_allows_context_source_outside_daily_window(story_factory):
@@ -269,20 +269,20 @@ def test_allows_context_source_outside_daily_window(story_factory):
     assert result.digest.stories == [story]
 
 
-def test_rejects_missing_holding_coverage(story_factory):
+def test_missing_holding_coverage_is_not_post_validated(story_factory):
     story = story_factory(publication_date=END.date())
     response = response_for(ResearchDigest(stories=[story]), story.url)
     researcher = OpenAIResearcher("key", client=FakeClient(response))
-    with pytest.raises(ResearchError, match="omitted holding.*MSFT"):
-        researcher.research(
-            ["NASDAQ:GOOG", "NASDAQ:MSFT"],
-            lookback_start=START,
-            lookback_end=END,
-            recent_history=[],
-        )
+    result = researcher.research(
+        ["NASDAQ:GOOG", "NASDAQ:MSFT"],
+        lookback_start=START,
+        lookback_end=END,
+        recent_history=[],
+    )
+    assert result.digest.stories == [story]
 
 
-def test_validates_all_paragraph_citations_against_consulted_sources(story_factory):
+def test_preserves_all_paragraph_citations(story_factory):
     second_url = "https://finance.example/quote/goog"
     story = story_factory(
         publication_date=END.date(),
@@ -317,17 +317,17 @@ def test_ticker_resolution_hints_expand_euronext_codes():
     ]
 
 
-def test_rejects_price_only_paragraph_without_relevant_context(story_factory):
+def test_price_only_paragraph_is_not_post_validated(story_factory):
     story = story_factory(
         headline="Alphabet closed higher.",
         relevance_summary="No fresh, verified catalyst emerged during the research window.",
     )
     response = response_for(ResearchDigest(stories=[story]), story.url)
     researcher = OpenAIResearcher("key", client=FakeClient(response))
-    with pytest.raises(ResearchError, match="without relevant event context"):
-        researcher.research(
-            ["NASDAQ:GOOG"], lookback_start=START, lookback_end=END, recent_history=[]
-        )
+    result = researcher.research(
+        ["NASDAQ:GOOG"], lookback_start=START, lookback_end=END, recent_history=[]
+    )
+    assert result.digest.stories == [story]
 
 
 def test_openai_rate_limit_is_retried(monkeypatch, story_factory):

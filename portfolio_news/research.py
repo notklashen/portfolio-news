@@ -11,9 +11,8 @@ from typing import Any, Optional
 from pydantic import ValidationError
 
 from .errors import ResearchError
-from .models import ResearchDigest, StoryCategory
+from .models import ResearchDigest
 from .retrying import retry_call
-from .sources import canonicalize_url
 
 
 _EXCHANGE_SEARCH_NAMES = {
@@ -23,15 +22,6 @@ _EXCHANGE_SEARCH_NAMES = {
     "NYSE": "New York Stock Exchange",
     "LON": "London Stock Exchange",
 }
-
-_MISSING_CONTEXT_PHRASES = (
-    "no fresh, verified catalyst",
-    "no fresh verified catalyst",
-    "no verified catalyst",
-    "no fresh catalyst",
-    "no material catalyst",
-)
-
 
 @dataclass(frozen=True)
 class ResearchResult:
@@ -142,13 +132,6 @@ class OpenAIResearcher:
             raise ResearchError("OpenAI returned malformed structured digest output") from exc
 
         source_metadata = self._extract_source_metadata(response)
-        digest = self._validate_stories(
-            digest,
-            tickers=tickers,
-            lookback_start=lookback_start,
-            lookback_end=lookback_end,
-            source_metadata=source_metadata,
-        )
         usage = getattr(response, "usage", None)
         input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
         output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
@@ -235,66 +218,6 @@ Research rules:
                 hint["exchange_name"] = exchange_name
             hints.append(hint)
         return hints
-
-    def _validate_stories(
-        self,
-        digest: ResearchDigest,
-        *,
-        tickers: list[str],
-        lookback_start: datetime,
-        lookback_end: datetime,
-        source_metadata: list[dict[str, Any]],
-    ) -> ResearchDigest:
-        held = set(tickers)
-        consulted_urls: set[str] = set()
-        for source in source_metadata:
-            url = source.get("url")
-            if isinstance(url, str):
-                try:
-                    consulted_urls.add(canonicalize_url(url))
-                except ValueError:
-                    continue
-
-        if not consulted_urls:
-            raise ResearchError("OpenAI recap did not include consulted web sources")
-
-        seen_events: set[str] = set()
-        covered_tickers: set[str] = set()
-        for story in digest.stories:
-            paragraph_text = f"{story.headline} {story.relevance_summary}".casefold()
-            if any(phrase in paragraph_text for phrase in _MISSING_CONTEXT_PHRASES):
-                raise ResearchError(
-                    "OpenAI recap returned price movement without relevant event context"
-                )
-            invalid_tickers = set(story.affected_tickers) - held
-            if invalid_tickers:
-                raise ResearchError(
-                    "OpenAI recap referenced unknown ticker(s): "
-                    + ", ".join(sorted(invalid_tickers))
-                )
-            if story.category is StoryCategory.PORTFOLIO and not story.affected_tickers:
-                raise ResearchError("OpenAI recap returned a portfolio paragraph without a ticker")
-            if story.event_key in seen_events:
-                raise ResearchError("OpenAI recap returned duplicate event keys")
-            for citation in story.all_citations:
-                try:
-                    canonical_url = canonicalize_url(citation.url)
-                except ValueError as exc:
-                    raise ResearchError("OpenAI recap returned an invalid citation URL") from exc
-                if canonical_url not in consulted_urls:
-                    raise ResearchError(
-                        "OpenAI recap cited a URL absent from consulted web sources: "
-                        + citation.url
-                    )
-            covered_tickers.update(story.affected_tickers)
-            seen_events.add(story.event_key)
-
-        missing_tickers = held - covered_tickers
-        if missing_tickers:
-            raise ResearchError(
-                "OpenAI recap omitted holding(s): " + ", ".join(sorted(missing_tickers))
-            )
-        return digest
 
     @classmethod
     def _value(cls, value: Any, key: str) -> Any:
