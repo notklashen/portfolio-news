@@ -66,7 +66,7 @@ class FakeService:
         return self.resource
 
 
-def make_service(value_ranges, title="PORTFOLIO_TRACKER", sheets=("Holdings",)):
+def make_service(value_ranges, title="PORTFOLIO_TRACKER", sheets=("overview",)):
     metadata = {
         "properties": {"title": title},
         "sheets": [{"properties": {"title": sheet}} for sheet in sheets],
@@ -94,7 +94,7 @@ def test_quote_sheet_title_escapes_apostrophe():
     assert quote_sheet_title("Owner's holdings") == "'Owner''s holdings'"
 
 
-def test_discovers_header_and_returns_unique_valid_tickers(tmp_path, caplog):
+def test_reads_only_overview_and_returns_unique_valid_tickers(tmp_path, caplog):
     service = make_service(
         [
             {
@@ -106,16 +106,25 @@ def test_discovers_header_and_returns_unique_valid_tickers(tmp_path, caplog):
                     ["NASDAQ:GOOG", 3],
                     ["EPA:MC", 4],
                 ]
-            },
-            {"values": [["Notes"], ["No holdings here"]]},
+            }
         ],
-        sheets=("Holdings", "Notes"),
+        sheets=("Overview", "transactions"),
     )
     reader = SheetsPortfolioReader("id", tmp_path / "credentials.json", service=service)
     with caplog.at_level(logging.WARNING):
         assert reader.read_tickers() == ["NASDAQ:GOOG", "EPA:MC"]
     assert "malformed_ticker_row" in caplog.text
-    assert service.resource._values.kwargs["ranges"] == ["'Holdings'", "'Notes'"]
+    assert service.resource._values.kwargs["ranges"] == ["'Overview'"]
+
+
+def test_ignores_ticker_header_in_other_worksheets(tmp_path):
+    service = make_service(
+        [{"values": [["Ticker"], ["NASDAQ:GOOG"]]}],
+        sheets=("overview", "transactions"),
+    )
+    reader = SheetsPortfolioReader("id", tmp_path / "credentials.json", service=service)
+    assert reader.read_tickers() == ["NASDAQ:GOOG"]
+    assert service.resource._values.kwargs["ranges"] == ["'overview'"]
 
 
 def test_fails_if_no_header(tmp_path):
@@ -130,11 +139,20 @@ def test_fails_if_no_header(tmp_path):
 
 def test_fails_if_multiple_headers(tmp_path):
     service = make_service(
-        [{"values": [["Ticker"]]}, {"values": [["ticker"]]}],
-        sheets=("One", "Two"),
+        [{"values": [["Ticker", "ticker"]]}],
     )
     reader = SheetsPortfolioReader("id", Path("unused"), service=service)
-    with pytest.raises(SheetError, match="Multiple"):
+    with pytest.raises(SheetError, match="Multiple 'Ticker'.*overview"):
+        reader.read_tickers()
+
+
+def test_fails_if_overview_worksheet_is_missing(tmp_path):
+    service = make_service(
+        [{"values": [["Ticker"], ["NASDAQ:GOOG"]]}],
+        sheets=("transactions",),
+    )
+    reader = SheetsPortfolioReader("id", Path("unused"), service=service)
+    with pytest.raises(SheetError, match="Required worksheet 'overview'.*transactions"):
         reader.read_tickers()
 
 

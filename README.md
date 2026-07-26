@@ -8,8 +8,8 @@ The production schedule is 08:00 Monday–Friday in `Europe/Paris`. Delivery his
 
 1. A non-blocking file lock prevents timer and manual runs from overlapping.
 2. Any previously prepared but undelivered digest is retried first, without calling Sheets or OpenAI again.
-3. The workbook title is verified as exactly `PORTFOLIO_TRACKER`. Every worksheet is scanned for one case-insensitive `Ticker` cell; zero or multiple matches are fatal.
-4. Valid ticker cells beneath that header are trimmed, uppercased, and deduplicated. Malformed rows are logged and skipped.
+3. The workbook title is verified as exactly `PORTFOLIO_TRACKER`. Only the `overview` worksheet is read (matched case-insensitively), and it must contain exactly one case-insensitive `Ticker` cell.
+4. Valid ticker cells beneath that header are trimmed, uppercased, and deduplicated. Other worksheets are ignored; malformed rows in `overview` are logged and skipped.
 5. One OpenAI Responses API request researches the interval since the last successfully covered digest, capped at four days. The request uses `gpt-5.6-sol`, low reasoning, low web-search context, structured output, and a domain allowlist.
 6. Code rejects non-allowlisted sources, previously delivered canonical URLs, and repeated event keys unless the model marks a genuinely changed summary as a material update.
 7. The HTML digest is prepared in SQLite before Telegram is called. Stories become delivered only after Telegram returns a message ID.
@@ -23,7 +23,7 @@ An empty result still sends `No material new portfolio news today.` as a health 
 3. Rename the target spreadsheet to exactly `PORTFOLIO_TRACKER`.
 4. Share that spreadsheet as **Viewer** with the service account's `client_email` from the JSON file.
 5. Copy the spreadsheet ID from the URL segment between `/d/` and `/edit` into `GOOGLE_SPREADSHEET_ID`.
-6. Ensure exactly one worksheet contains a cell whose trimmed text is `Ticker`, case-insensitively. Put holdings below that cell in the same column, for example `NASDAQ:GOOG`.
+6. Name the holdings worksheet `overview` (case-insensitively) and ensure it contains exactly one cell whose trimmed text is `Ticker`, also case-insensitively. Put holdings below that cell in the same column, for example `NASDAQ:GOOG`. `Ticker` columns in worksheets such as `transactions` are ignored.
 
 The application uses only `https://www.googleapis.com/auth/spreadsheets.readonly`.
 

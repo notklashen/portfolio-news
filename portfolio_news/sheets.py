@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from itertools import zip_longest
 import logging
 from pathlib import Path
 import re
@@ -14,6 +13,7 @@ from .retrying import retry_call
 
 READONLY_SCOPE = "https://www.googleapis.com/auth/spreadsheets.readonly"
 EXPECTED_WORKBOOK_TITLE = "PORTFOLIO_TRACKER"
+PORTFOLIO_WORKSHEET_TITLE = "overview"
 _TICKER_PATTERN = re.compile(
     r"^(?:[A-Z0-9][A-Z0-9._-]{0,31}:)?[A-Z0-9.][A-Z0-9._-]{0,31}$"
 )
@@ -104,39 +104,58 @@ class SheetsPortfolioReader:
             for sheet in metadata.get("sheets", [])
             if sheet.get("properties", {}).get("title")
         ]
-        if not worksheet_titles:
-            raise SheetError("Spreadsheet has no worksheets")
+        matching_titles = [
+            title
+            for title in worksheet_titles
+            if title.strip().casefold() == PORTFOLIO_WORKSHEET_TITLE.casefold()
+        ]
+        if not matching_titles:
+            available = ", ".join(repr(title) for title in worksheet_titles) or "none"
+            raise SheetError(
+                f"Required worksheet {PORTFOLIO_WORKSHEET_TITLE!r} was not found; "
+                f"available worksheets: {available}"
+            )
+        if len(matching_titles) > 1:
+            matches = ", ".join(repr(title) for title in matching_titles)
+            raise SheetError(
+                f"Multiple worksheets match {PORTFOLIO_WORKSHEET_TITLE!r}: {matches}"
+            )
+        worksheet_title = matching_titles[0]
 
-        ranges = [quote_sheet_title(title) for title in worksheet_titles]
         values_request = self.service.spreadsheets().values().batchGet(
             spreadsheetId=self.spreadsheet_id,
-            ranges=ranges,
+            ranges=[quote_sheet_title(worksheet_title)],
             majorDimension="ROWS",
         )
         response = self._execute(values_request, "sheets_values")
         value_ranges = response.get("valueRanges", [])
+        rows = (
+            value_ranges[0].get("values", [])
+            if value_ranges and isinstance(value_ranges[0], dict)
+            else []
+        )
 
-        headers: list[tuple[str, int, int, list[list[object]]]] = []
-        for title, value_range in zip_longest(worksheet_titles, value_ranges, fillvalue={}):
-            if not isinstance(title, str):
+        headers: list[tuple[int, int]] = []
+        for row_index, row in enumerate(rows, start=1):
+            if not isinstance(row, list):
                 continue
-            rows = value_range.get("values", []) if isinstance(value_range, dict) else []
-            for row_index, row in enumerate(rows, start=1):
-                if not isinstance(row, list):
-                    continue
-                for column_index, cell in enumerate(row):
-                    if isinstance(cell, str) and cell.strip().casefold() == "ticker":
-                        headers.append((title, row_index, column_index, rows))
+            for column_index, cell in enumerate(row):
+                if isinstance(cell, str) and cell.strip().casefold() == "ticker":
+                    headers.append((row_index, column_index))
 
         if not headers:
-            raise SheetError("No case-insensitive 'Ticker' header found in any worksheet")
+            raise SheetError(
+                f"No case-insensitive 'Ticker' header found in worksheet {worksheet_title!r}"
+            )
         if len(headers) > 1:
             locations = ", ".join(
-                f"{title}!R{row}C{column + 1}" for title, row, column, _ in headers
+                f"{worksheet_title}!R{row}C{column + 1}" for row, column in headers
             )
-            raise SheetError(f"Multiple 'Ticker' headers found: {locations}")
+            raise SheetError(
+                f"Multiple 'Ticker' headers found in worksheet {worksheet_title!r}: {locations}"
+            )
 
-        title, header_row, column, rows = headers[0]
+        header_row, column = headers[0]
         tickers: list[str] = []
         seen: set[str] = set()
         for row_number, row in enumerate(rows[header_row:], start=header_row + 1):
@@ -149,7 +168,11 @@ class SheetsPortfolioReader:
             if ticker is None:
                 self.log.warning(
                     "malformed_ticker_row",
-                    extra={"worksheet": title, "row": row_number, "value": str(raw)[:120]},
+                    extra={
+                        "worksheet": worksheet_title,
+                        "row": row_number,
+                        "value": str(raw)[:120],
+                    },
                 )
                 continue
             if ticker not in seen:
@@ -157,9 +180,12 @@ class SheetsPortfolioReader:
                 seen.add(ticker)
 
         if not tickers:
-            raise SheetError(f"No valid tickers found below {title}!R{header_row}C{column + 1}")
+            raise SheetError(
+                f"No valid tickers found below "
+                f"{worksheet_title}!R{header_row}C{column + 1}"
+            )
         self.log.info(
             "portfolio_loaded",
-            extra={"worksheet": title, "ticker_count": len(tickers)},
+            extra={"worksheet": worksheet_title, "ticker_count": len(tickers)},
         )
         return tickers
